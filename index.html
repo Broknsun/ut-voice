@@ -1,0 +1,267 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>UT Voice — 文字发声器</title>
+<style>
+  :root{
+    --ink:#f4f4f4; --dim:#7a7a7a; --line:#2a2a2a; --bg:#000; --sel:#ffff5c;
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%}
+  body{
+    margin:0; background:var(--bg); color:var(--ink);
+    font-family:"Courier New",ui-monospace,monospace;
+    display:flex; flex-direction:column; align-items:center;
+    padding:28px 18px 40px; gap:18px; overflow:hidden;
+  }
+  h1{
+    font-size:15px; letter-spacing:.32em; color:var(--sel);
+    margin:0; font-weight:400; text-transform:uppercase;
+  }
+  .sub{font-size:11px;color:var(--dim);letter-spacing:.18em;margin-top:-10px}
+  #stage{
+    width:min(880px,100%); height:230px; border:3px solid #fff;
+    padding:22px 26px; overflow-y:auto; position:relative;
+    font-size:24px; line-height:1.65; letter-spacing:.02em;
+    white-space:pre-wrap; word-break:break-word;
+  }
+  #stage .caret{color:var(--sel)}
+  .row{width:min(880px,100%);display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+  button{
+    font-family:inherit; font-size:13px; letter-spacing:.1em;
+    background:#111; color:var(--ink); border:2px solid #444;
+    padding:7px 14px; cursor:pointer; transition:.12s;
+  }
+  button:hover{border-color:#fff;color:#fff}
+  button.on{background:var(--sel);color:#000;border-color:var(--sel)}
+  #play{border-color:#fff}
+  #play.on{background:#e04444;border-color:#e04444;color:#fff}
+  textarea{
+    width:min(880px,100%); height:88px; resize:vertical;
+    background:#0a0a0a; border:2px solid var(--line); color:var(--ink);
+    font-family:inherit; font-size:14px; padding:10px 12px; outline:none;
+    line-height:1.6;
+  }
+  textarea:focus{border-color:#555}
+  .knobs{width:min(880px,100%);display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:14px}
+  label.k{display:flex;flex-direction:column;gap:6px;font-size:11px;color:var(--dim);letter-spacing:.14em}
+  label.k b{color:var(--sel);font-weight:400}
+  input[type=range]{width:100%;accent-color:#ffff5c;background:transparent}
+  .foot{font-size:10px;color:#3a3a3a;letter-spacing:.14em}
+</style>
+</head>
+<body>
+
+<h1>UT Voice</h1>
+<div class="sub">one blip per character — no actual voice</div>
+
+<div id="stage"><span id="out"></span><span class="caret" id="caret">▮</span></div>
+
+<div class="row" id="voices"></div>
+
+<div class="row">
+  <button id="play">▶ 说话</button>
+  <button id="stop">■ 停</button>
+  <button id="clear">✕ 清空</button>
+  <button id="share">⧉ 复制分享链接</button>
+</div>
+
+<textarea id="text">it's a beautiful day outside.
+birds are singing, flowers are blooming...
+on days like these, kids like you
+should be burning in hell.</textarea>
+
+<div class="knobs">
+  <label class="k">语速 <b id="vRate">42</b> ms/字
+    <input id="rate" type="range" min="12" max="140" value="42">
+  </label>
+  <label class="k">音高抖动 <b id="vJit">6</b> %
+    <input id="jit" type="range" min="0" max="30" value="6">
+  </label>
+  <label class="k">音量 <b id="vVol">35</b> %
+    <input id="vol" type="range" min="0" max="100" value="35">
+  </label>
+</div>
+
+<div class="foot">waveform · square / triangle / saw / sine — 每字符一次触发</div>
+
+<script>
+// ---------- 角色音色 ----------
+const VOICES = {
+  sans:     {label:"SANS",     type:"square",   base:112, spread:0.10, dur:0.048, gain:1.0,  rhythm:1.00, drop:0.94},
+  papyrus:  {label:"PAPYRUS",  type:"square",   base:330, spread:0.05, dur:0.042, gain:0.55, rhythm:0.82, drop:1.00},
+  toriel:   {label:"TORIEL",   type:"triangle", base:214, spread:0.04, dur:0.055, gain:0.75, rhythm:1.12, drop:0.97},
+  flowey:   {label:"FLOWEY",   type:"square",   base:545, spread:0.03, dur:0.030, gain:0.34, rhythm:0.74, drop:1.03},
+  undyne:   {label:"UNDYNE",   type:"sawtooth", base:268, spread:0.07, dur:0.052, gain:0.42, rhythm:0.88, drop:0.96},
+  alphys:   {label:"ALPHYS",   type:"triangle", base:404, spread:0.12, dur:0.040, gain:0.50, rhythm:1.18, drop:1.05},
+  blook:    {label:"NAPS.",    type:"sine",     base:96,  spread:0.02, dur:0.070, gain:0.85, rhythm:1.45, drop:0.92},
+  maxiang:  {label:"抹香",     type:"sine",     base:74,  spread:0.04, dur:0.085, gain:1.00, rhythm:1.58, drop:0.90},
+};
+
+let curVoice = "sans";
+let ac = null;
+const $ = id => document.getElementById(id);
+const out = $("out"), caret = $("caret"), stage = $("stage");
+
+// ---------- 发声 ----------
+function ensureAudio(){
+  if (!ac) ac = new (window.AudioContext || window.webkitAudioContext)();
+  if (ac.state === "suspended") ac.resume();
+  return ac;
+}
+
+function blip(freq, v){
+  const ctx = ensureAudio();
+  const t = ctx.currentTime;
+  const osc = ctx.createOscillator();
+  const g   = ctx.createGain();
+  osc.type = v.type;
+  osc.frequency.setValueAtTime(freq, t);
+  const peak = (v.gain * volVal() / 100) * 0.30;
+  const d = v.dur;
+  g.gain.setValueAtTime(0.0001, t);
+  g.gain.linearRampToValueAtTime(peak, t + 0.004);
+  g.gain.setValueAtTime(peak, t + d * 0.55);
+  g.gain.exponentialRampToValueAtTime(0.0001, t + d);
+  osc.connect(g).connect(ctx.destination);
+  osc.start(t);
+  osc.stop(t + d + 0.02);
+}
+
+const volVal = () => +$("vol").value;
+const jitVal = () => +$("jit").value / 100;
+const rateVal = () => +$("rate").value;
+
+// ---------- 字符时序 ----------
+// 返回 [显示字符, 该字符停顿毫秒, 是否发声, 音高倍率]
+function stepFor(ch, i, text, v){
+  const code = ch.charCodeAt(0);
+  const isCJK = code > 0x2E80;
+  const pitchJitter = 1 + (Math.random() * 2 - 1) * jitVal();
+
+  if (ch === "\n") return ["\n", 320 * v.rhythm, false, 1];
+  if (ch === " ")  return [" ", 26 * v.rhythm, false, 1];
+
+  // 标点：不发声，拉长停顿
+  if ("，,、；;：:".includes(ch)) return [ch, 150 * v.rhythm, false, 1];
+  if ("。.！!？?—…".includes(ch)) return [ch, 250 * v.rhythm, false, 1];
+  if ("\"'“”‘’()（）[]【】《》".includes(ch)) return [ch, 60 * v.rhythm, false, 1];
+
+  let mul = pitchJitter * v.drop;
+  if (ch === "？" || ch === "?") mul *= 1.22;   // 问号上扬
+  if (ch === "！" || ch === "!") mul *= 1.10;
+
+  const d = rateVal() * v.rhythm * (isCJK ? 1.15 : 1);
+  return [ch, d, true, mul];
+}
+
+// ---------- 播放 ----------
+let timer = null, playing = false;
+
+function stop(){
+  playing = false;
+  if (timer) { clearTimeout(timer); timer = null; }
+  $("play").classList.remove("on");
+  $("play").textContent = "▶ 说话";
+}
+
+function speak(){
+  stop();
+  ensureAudio();
+  const text = $("text").value;
+  if (!text.trim()) return;
+  const v = VOICES[curVoice];
+  out.textContent = "";
+  playing = true;
+  $("play").classList.add("on");
+  $("play").textContent = "▶ 说话中";
+
+  let i = 0;
+  const tick = () => {
+    if (!playing || i >= text.length) { stop(); return; }
+    const ch = text[i];
+    const [shown, delay, voiced, mul] = stepFor(ch, i, text, v);
+    out.textContent += shown;
+    stage.scrollTop = stage.scrollHeight;
+    if (voiced) blip(v.base * mul, v);
+    i++;
+    timer = setTimeout(tick, delay);
+  };
+  tick();
+}
+
+// ---------- UI ----------
+const DEMO_LINES = {
+  sans:"heh. ok.", papyrus:"NYEH HEH HEH!", toriel:"my child...",
+  flowey:"howdy!", undyne:"NGAAAH!!", alphys:"u-um... hi?", blook:"...oh...",
+  maxiang:"哦——好呀，我在这呢。"
+};
+
+function syncVoiceButtons(){
+  [...$("voices").children].forEach(c => c.classList.toggle("on", c.dataset.k === curVoice));
+}
+
+function buildVoices(){
+  const box = $("voices");
+  for (const [key, v] of Object.entries(VOICES)){
+    const b = document.createElement("button");
+    b.textContent = v.label;
+    b.dataset.k = key;
+    b.onclick = () => { curVoice = key; syncVoiceButtons(); previewLine(DEMO_LINES[key]); };
+    box.appendChild(b);
+  }
+  syncVoiceButtons();
+}
+
+function previewLine(str){
+  const old = $("text").value;
+  $("text").value = str;
+  speak();
+  setTimeout(() => { if (!playing) $("text").value = old; }, 30);
+}
+
+// ---------- 分享 ----------
+function shareLink(){
+  const u = new URL(location.href);
+  u.search = "";
+  u.searchParams.set("v", curVoice);
+  u.searchParams.set("t", $("text").value);
+  u.searchParams.set("auto", "1");
+  return u.toString();
+}
+
+$("share").onclick = async () => {
+  const link = shareLink();
+  try { await navigator.clipboard.writeText(link); $("share").textContent = "✓ 已复制"; }
+  catch { prompt("复制这个链接：", link); $("share").textContent = "✓ 已生成"; }
+  setTimeout(() => $("share").textContent = "⧉ 复制分享链接", 1400);
+};
+
+// ---------- URL 参数 ----------
+// ?v=sans&t=heh.+ok.&auto=1   直接念
+(function fromURL(){
+  const p = new URLSearchParams(location.search);
+  const v = p.get("v") || p.get("voice");
+  if (v && VOICES[v]) { curVoice = v; syncVoiceButtons(); }
+  const t = p.get("t") || p.get("text");
+  if (t){
+    $("text").value = t;
+    if (p.get("auto") !== "0") setTimeout(speak, 160);
+  }
+})();
+
+$("play").onclick  = () => playing ? stop() : speak();
+$("stop").onclick  = stop;
+$("clear").onclick = () => { stop(); out.textContent = ""; $("text").value = ""; $("text").focus(); };
+$("rate").oninput  = e => $("vRate").textContent = e.target.value;
+$("jit").oninput   = e => $("vJit").textContent  = e.target.value;
+$("vol").oninput   = e => $("vVol").textContent  = e.target.value;
+
+// 闪烁光标
+setInterval(() => caret.style.opacity = caret.style.opacity === "0" ? "1" : "0", 520);
+
+buildVoices();
+</script>
+</body>
+</html>
