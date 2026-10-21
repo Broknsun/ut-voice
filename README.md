@@ -51,32 +51,6 @@ echo "my child..." | python ut_say.py -v toriel
 | `--seed` | 固定随机种子，结果可复现 |
 | `--no-play` | 只生成不播放 |
 
-### 3. PowerShell 通知音（Windows）
-
-`blip.ps1` 把上面那套包成几条命令，专门用来**在你没看屏幕的时候出声**。
-
-```powershell
-. D:\zaxiang\ut-voice\blip.ps1
-
-blip "我在这呢"                    # 用抹香的声音念一句
-blip "NYEH" -Voice papyrus         # 换嗓
-blip-done                          # 完成音（预生成，毫秒级）
-blip-error                         # 出错音
-blip-alert                         # 提醒音
-Invoke-Bliped { npm run build }    # 跑命令，成功响 done、失败响 error
-blip-loop "等你回来" -IntervalSeconds 30
-```
-
-`demos/cue_done.wav`、`cue_error.wav`、`cue_alert.wav` 是预渲染的三个短音（0.3–0.9 秒），直接播放，不经过 Python。
-
-想开机就能用，把这一行加进 `$PROFILE`：
-
-```powershell
-. D:\zaxiang\ut-voice\blip.ps1
-```
-
-> 文件是 UTF-8 **带 BOM** 保存的。Windows PowerShell 5.1 读无 BOM 的中文会乱码并解析失败，别把它存成无 BOM。
-
 ---
 
 ## 音色
